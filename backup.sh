@@ -56,7 +56,12 @@ STEP_GIT="⚠️ skipped"
 log "Step 1: Archiving directories..."
 cp -R "$HOME/.openclaw/workspace/" "$TEMP_BACKUP_DIR/openclaw_workspace" 2>/dev/null && \
 cp -R "$HOME/.openclaw/agents/" "$TEMP_BACKUP_DIR/openclaw_agents" 2>/dev/null && \
-cp -R "$HOME/.doroto/" "$TEMP_BACKUP_DIR/doroto" 2>/dev/null && \
+rsync -a --quiet \
+    --exclude='ai-os-backup-recovery/backups/' \
+    --exclude='bridge_outputs/' \
+    --exclude='logs/*.log' \
+    --exclude='__pycache__/' \
+    "$HOME/.doroto/" "$TEMP_BACKUP_DIR/doroto/" 2>/dev/null && \
 STEP_FILES="✅"
 
 cp -R "$HOME/Library/LaunchAgents/ai.doroto."* "$TEMP_BACKUP_DIR/launchagents/" 2>/dev/null || true
@@ -68,9 +73,11 @@ fi
 # ---- Step 2: Export n8n workflows --------------------------
 
 log "Step 2: Exporting n8n workflows..."
+N8N_KEY=$(read_secret n8n_key)
 if curl -sf --max-time 5 "http://localhost:5678/healthz" > /dev/null 2>&1; then
-    curl -s "http://localhost:5678/api/v1/workflows?all=true" \
+    curl -s "http://localhost:5678/api/v1/workflows" \
         -H "Accept: application/json" \
+        -H "X-N8N-API-KEY: ${N8N_KEY}" \
         > "$TEMP_BACKUP_DIR/n8n_workflows.json" 2>/dev/null && \
     STEP_N8N="✅" || STEP_N8N="❌ export failed"
 else
@@ -82,14 +89,23 @@ fi
 
 BACKUP_FILE="${BACKUP_DIR}/${TEMP_BACKUP_PREFIX}.zip"
 log "Step 3: Creating zip archive: $BACKUP_FILE"
-zip -r -q "$BACKUP_FILE" "$TEMP_BACKUP_DIR" && STEP_ZIP="✅" || log "ERROR: zip failed"
+if zip -r -q "$BACKUP_FILE" "$TEMP_BACKUP_DIR" 2>/dev/null; then
+    STEP_ZIP="✅"
+else
+    log "ERROR: zip failed"
+    STEP_ZIP="❌"
+fi
 rm -rf "$TEMP_BACKUP_DIR"
 
 # ---- Step 4: Rotate local backups (keep 7) -----------------
 
 log "Step 4: Rotating local backups..."
 ls -t "$BACKUP_DIR"/*.zip 2>/dev/null | tail -n +8 | xargs rm -f 2>/dev/null || true
-STEP_LOCAL="✅ $(basename "$BACKUP_FILE")"
+if [[ "$STEP_ZIP" == "✅" ]]; then
+    STEP_LOCAL="✅ $(basename "$BACKUP_FILE")"
+else
+    STEP_LOCAL="❌ zip failed — no local file"
+fi
 
 # ---- Step 5: Sync to Google Drive --------------------------
 
